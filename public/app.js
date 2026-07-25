@@ -102,7 +102,23 @@
     }
   }
 
-  feedEl.addEventListener('scroll', checkScrollPosition, { passive: true });
+  // Coalesce scroll events to once per animation frame instead of firing on
+  // every raw scroll tick — avoids competing with the browser's own snap/fling
+  // physics for main-thread time, which is what causes janky, unresponsive
+  // scrolling (especially noticeable scrolling back up) on lower-end phones.
+  let scrollTicking = false;
+  feedEl.addEventListener(
+    'scroll',
+    () => {
+      if (scrollTicking) return;
+      scrollTicking = true;
+      requestAnimationFrame(() => {
+        checkScrollPosition();
+        scrollTicking = false;
+      });
+    },
+    { passive: true }
+  );
 
   // Kick off the initial load.
   loadNextPage().then(() => {

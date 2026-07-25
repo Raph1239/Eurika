@@ -91,8 +91,19 @@ const SYSTEM_PROMPT = `You write short posts for a fictional text-only social fe
 Each post must be 1-3 sentences, punchy, and self-contained — aim for under 30 words per post, no
 exceptions. Vary topics across the batch: tech takes, random/obscure facts, one-liner jokes, hot takes,
 science, history trivia, life advice. Invent a distinct, believable social-handle-style author for each
-post (never a real person). Do not repeat ideas or phrasing across posts in the same batch. Keep it safe
-for a general audience. Be concise everywhere — there is a strict output token budget.`;
+post (never a real person). Keep it safe for a general audience. Be concise everywhere — there is a
+strict output token budget.
+
+Variety is critical — this feed is generated in many separate batches over time, and near-duplicate
+posts (same idea reworded, same joke structure, same fact from a different angle) are a hard failure.
+Within a batch and across batches: never reuse an idea, fact, or joke premise you've already used; never
+start two posts with the same first three words; avoid leaning on the same few crutch openers like
+"Hot take:", "Fun fact:", "Did you know", or "PSA:" more than once per batch — most posts shouldn't use
+a label prefix at all. Vary sentence structure and rhythm, not just topic.`;
+
+// How many recently-generated posts to show the model so it avoids repeating
+// itself. Capped so prompt size stays small as the cache grows.
+const ANTI_REPEAT_WINDOW = 25;
 
 /**
  * Calls the Anthropic API once to generate a batch of BATCH_SIZE posts,
@@ -100,6 +111,14 @@ for a general audience. Be concise everywhere — there is a strict output token
  * and returns the newly created posts.
  */
 async function generateBatch() {
+  const cache = loadCache();
+  const recentTexts = cache.slice(-ANTI_REPEAT_WINDOW).map((p) => p.text);
+  const antiRepeatBlock = recentTexts.length
+    ? `\n\nAlready posted — do NOT repeat these ideas or reuse similar phrasing/structure:\n${recentTexts
+        .map((t) => `- ${t}`)
+        .join('\n')}`
+    : '';
+
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -107,7 +126,10 @@ async function generateBatch() {
     messages: [
       {
         role: 'user',
-        content: `Generate exactly ${BATCH_SIZE} new posts as a JSON object matching the schema.`,
+        content:
+          `Generate exactly ${BATCH_SIZE} new posts as a JSON object matching the schema. ` +
+          `Every post must be a genuinely new idea, not a rewrite of anything already posted.` +
+          antiRepeatBlock,
       },
     ],
     output_config: {
@@ -143,7 +165,6 @@ async function generateBatch() {
     timestamp: new Date(now - i * 1000).toISOString(),
   }));
 
-  const cache = loadCache();
   const updatedCache = cache.concat(newPosts);
   saveCache(updatedCache);
 
