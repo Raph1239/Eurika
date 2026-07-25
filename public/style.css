@@ -26,7 +26,7 @@ html, body {
 
 #feed {
   height: 100vh;
-  height: 100dvh;
+  height: 100svh;
   overflow-y: scroll;
   scroll-snap-type: y mandatory;
   overscroll-behavior-y: contain;
@@ -35,7 +35,7 @@ html, body {
 
 .post {
   height: 100vh;
-  height: 100dvh;
+  height: 100svh;
   scroll-snap-align: start;
   scroll-snap-stop: always;
   display: flex;

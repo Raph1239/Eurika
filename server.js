@@ -55,6 +55,37 @@ function saveCache(posts) {
 
 // ---------- Generation ----------
 
+// A deliberately large pool so each batch can be assigned distinct topics —
+// relying on the model to self-diversify (via prompt instructions alone)
+// wasn't enough on a small/cheap model like Haiku, which tends to converge
+// on the same few ideas per category. Forcing one topic per post slot is a
+// hard structural constraint instead of a soft suggestion.
+const TOPICS = [
+  'tech',
+  'random-fact',
+  'joke',
+  'hot-take',
+  'science',
+  'history',
+  'life-advice',
+  'space',
+  'nature',
+  'food',
+  'internet-culture',
+  'psychology',
+  'money',
+  'language',
+  'ancient-world',
+  'weird-laws',
+  'sports',
+  'movies-and-tv',
+  'future-tech',
+  'health',
+  'animals',
+  'geography',
+  'gaming',
+];
+
 const POST_SCHEMA = {
   type: 'object',
   properties: {
@@ -74,8 +105,7 @@ const POST_SCHEMA = {
           },
           topic: {
             type: 'string',
-            description:
-              'One of: tech, random-fact, joke, hot-take, science, history, life-advice.',
+            enum: TOPICS,
           },
         },
         required: ['text', 'author', 'topic'],
@@ -89,21 +119,29 @@ const POST_SCHEMA = {
 
 const SYSTEM_PROMPT = `You write short posts for a fictional text-only social feed called InfiniScroll.
 Each post must be 1-3 sentences, punchy, and self-contained — aim for under 30 words per post, no
-exceptions. Vary topics across the batch: tech takes, random/obscure facts, one-liner jokes, hot takes,
-science, history trivia, life advice. Invent a distinct, believable social-handle-style author for each
-post (never a real person). Keep it safe for a general audience. Be concise everywhere — there is a
-strict output token budget.
+exceptions. Invent a distinct, believable social-handle-style author for each post (never a real
+person). Keep it safe for a general audience. Be concise everywhere — there is a strict output token
+budget.
 
 Variety is critical — this feed is generated in many separate batches over time, and near-duplicate
 posts (same idea reworded, same joke structure, same fact from a different angle) are a hard failure.
 Within a batch and across batches: never reuse an idea, fact, or joke premise you've already used; never
 start two posts with the same first three words; avoid leaning on the same few crutch openers like
 "Hot take:", "Fun fact:", "Did you know", or "PSA:" more than once per batch — most posts shouldn't use
-a label prefix at all. Vary sentence structure and rhythm, not just topic.`;
+a label prefix at all. Vary sentence structure and rhythm, not just topic. Each post's "topic" field must
+match its actual content — don't force an unrelated idea into an assigned topic; find a genuine angle
+within it instead.`;
 
 // How many recently-generated posts to show the model so it avoids repeating
 // itself. Capped so prompt size stays small as the cache grows.
-const ANTI_REPEAT_WINDOW = 25;
+const ANTI_REPEAT_WINDOW = 40;
+
+function pickBatchTopics() {
+  const shuffled = [...TOPICS].sort(() => Math.random() - 0.5);
+  // If BATCH_SIZE ever exceeds the topic pool size, wrap around rather than
+  // running out of entries.
+  return Array.from({ length: BATCH_SIZE }, (_, i) => shuffled[i % shuffled.length]);
+}
 
 /**
  * Calls the Anthropic API once to generate a batch of BATCH_SIZE posts,
@@ -119,6 +157,11 @@ async function generateBatch() {
         .join('\n')}`
     : '';
 
+  const batchTopics = pickBatchTopics();
+  const topicAssignments = batchTopics
+    .map((topic, i) => `${i + 1}. ${topic}`)
+    .join('\n');
+
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -127,7 +170,9 @@ async function generateBatch() {
       {
         role: 'user',
         content:
-          `Generate exactly ${BATCH_SIZE} new posts as a JSON object matching the schema. ` +
+          `Generate exactly ${BATCH_SIZE} new posts as a JSON object matching the schema, in this ` +
+          `exact topic order (post N's "topic" field must equal the assigned topic for slot N):\n` +
+          `${topicAssignments}\n\n` +
           `Every post must be a genuinely new idea, not a rewrite of anything already posted.` +
           antiRepeatBlock,
       },
