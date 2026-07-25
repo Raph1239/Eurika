@@ -246,6 +246,12 @@ app.use(
   })
 );
 
+// Belt-and-suspenders: API responses shouldn't be cached either.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 app.post('/api/generate-batch', async (req, res) => {
   try {
     const posts = await generateBatch();
