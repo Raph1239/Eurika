@@ -137,8 +137,46 @@ within it instead.`;
 // itself. Capped so prompt size stays small as the cache grows.
 const ANTI_REPEAT_WINDOW = 40;
 
-function pickBatchTopics() {
-  const shuffled = [...TOPICS].sort(() => Math.random() - 0.5);
+// How many liked post texts to show the model as style/tone examples. Kept
+// small — it's just a prompt hint, not extra API calls.
+const LIKED_EXAMPLES_WINDOW = 8;
+
+/**
+ * Gives every topic a weight of 1 (baseline, keeps exploration alive for
+ * topics never liked yet) plus one extra point per like it's ever received.
+ * This is the entire "algorithm": no extra API calls, no ML, just biasing
+ * which topics get assigned to the batch you were already about to generate.
+ */
+function computeTopicWeights(cache) {
+  const likeCounts = {};
+  for (const post of cache) {
+    if (post.liked) likeCounts[post.topic] = (likeCounts[post.topic] || 0) + 1;
+  }
+  return TOPICS.map((topic) => 1 + (likeCounts[topic] || 0));
+}
+
+// Weighted random permutation (roulette-wheel selection without
+// replacement) — topics with more likes tend to sort earlier, but every
+// topic still appears somewhere so the feed never collapses onto just one
+// or two liked categories.
+function weightedTopicOrder(weights) {
+  const pool = TOPICS.map((topic, i) => ({ topic, weight: weights[i] }));
+  const order = [];
+  while (pool.length > 0) {
+    const totalWeight = pool.reduce((sum, p) => sum + p.weight, 0);
+    let r = Math.random() * totalWeight;
+    let idx = 0;
+    while (idx < pool.length - 1 && r > pool[idx].weight) {
+      r -= pool[idx].weight;
+      idx += 1;
+    }
+    order.push(pool.splice(idx, 1)[0].topic);
+  }
+  return order;
+}
+
+function pickBatchTopics(cache) {
+  const shuffled = weightedTopicOrder(computeTopicWeights(cache));
   // If BATCH_SIZE ever exceeds the topic pool size, wrap around rather than
   // running out of entries.
   return Array.from({ length: BATCH_SIZE }, (_, i) => shuffled[i % shuffled.length]);
@@ -158,10 +196,21 @@ async function generateBatch() {
         .join('\n')}`
     : '';
 
-  const batchTopics = pickBatchTopics();
+  const batchTopics = pickBatchTopics(cache);
   const topicAssignments = batchTopics
     .map((topic, i) => `${i + 1}. ${topic}`)
     .join('\n');
+
+  const likedTexts = cache
+    .filter((p) => p.liked)
+    .slice(-LIKED_EXAMPLES_WINDOW)
+    .map((p) => p.text);
+  const likedBlock = likedTexts.length
+    ? `\n\nThe user hearted these previous posts — lean into a similar tone/energy where it fits the ` +
+      `assigned topic (but never repeat them or their wording):\n${likedTexts
+        .map((t) => `- ${t}`)
+        .join('\n')}`
+    : '';
 
   const response = await client.messages.create({
     model: MODEL,
@@ -175,7 +224,8 @@ async function generateBatch() {
           `exact topic order (post N's "topic" field must equal the assigned topic for slot N):\n` +
           `${topicAssignments}\n\n` +
           `Every post must be a genuinely new idea, not a rewrite of anything already posted.` +
-          antiRepeatBlock,
+          antiRepeatBlock +
+          likedBlock,
       },
     ],
     output_config: {
@@ -207,6 +257,7 @@ async function generateBatch() {
     text: String(p.text || '').trim(),
     author: String(p.author || '@anonymous').trim(),
     topic: String(p.topic || 'misc').trim(),
+    liked: false,
     // Stagger timestamps slightly so posts in a batch don't share one instant.
     timestamp: new Date(now - i * 1000).toISOString(),
   }));
@@ -312,6 +363,29 @@ app.get('/api/feed', async (req, res) => {
 
 app.get('/api/stats', (req, res) => {
   res.json({ apiCallsThisSession: apiCallCount });
+});
+
+// Toggling a like never calls the Anthropic API -- it just flips a flag on
+// the cached post. The "algorithm" effect comes later, the next time a
+// batch is generated: pickBatchTopics() reads these flags to bias topic
+// selection toward whatever the user has been hearting.
+app.post('/api/posts/:id/like', (req, res) => {
+  const { id } = req.params;
+  const liked = !!req.body.liked;
+
+  try {
+    const cache = loadCache();
+    const post = cache.find((p) => p.id === id);
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+    post.liked = liked;
+    saveCache(cache);
+    res.json({ id, liked });
+  } catch (err) {
+    console.error('like error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {

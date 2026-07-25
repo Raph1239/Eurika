@@ -33,7 +33,34 @@
     node.querySelector('.post-text').textContent = post.text;
     node.querySelector('.post-author').textContent = post.author;
     node.querySelector('.post-timestamp').textContent = formatTimestamp(post.timestamp);
+
+    const likeBtn = node.querySelector('.like-btn');
+    setLikeButtonState(likeBtn, !!post.liked);
+    likeBtn.addEventListener('click', () => toggleLike(post.id, likeBtn));
+
     feedEl.appendChild(node);
+  }
+
+  function setLikeButtonState(likeBtn, liked) {
+    likeBtn.classList.toggle('liked', liked);
+    likeBtn.setAttribute('aria-pressed', String(liked));
+  }
+
+  async function toggleLike(postId, likeBtn) {
+    const newLiked = !likeBtn.classList.contains('liked');
+    setLikeButtonState(likeBtn, newLiked); // optimistic — feels instant
+
+    try {
+      const res = await fetch(`/api/posts/${postId}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ liked: newLiked }),
+      });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    } catch (err) {
+      console.error('Failed to save like:', err);
+      setLikeButtonState(likeBtn, !newLiked); // revert on failure
+    }
   }
 
   function updateCounter(count) {
