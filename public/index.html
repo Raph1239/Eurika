@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>InfiniScroll</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="dev-counter" title="Anthropic API calls made this session (dev-only)">
+    API calls: <span id="dev-counter-value">0</span>
+  </div>
+
+  <main id="feed"></main>
+
+  <template id="post-template">
+    <section class="post">
+      <div class="post-topic"></div>
+      <p class="post-text"></p>
+      <div class="post-meta">
+        <span class="post-author"></span>
+        <span class="post-dot">&middot;</span>
+        <span class="post-timestamp"></span>
+      </div>
+    </section>
+  </template>
+
+  <div id="loading" class="loading hidden">
+    <div class="spinner"></div>
+    <span>Loading more posts&hellip;</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

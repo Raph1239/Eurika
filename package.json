@@ -1,0 +1,22 @@
+{
+  "name": "infiniscroll",
+  "version": "1.0.0",
+  "description": "Instagram-style infinite scroll feed of AI-generated text posts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:41729/git/Raph1239/Eurika"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  }
+}
