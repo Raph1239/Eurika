@@ -232,7 +232,19 @@ async function generateBatch() {
 // ---------- Routes ----------
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// Disable caching on the frontend assets. This is a fast-moving dev project —
+// the API contract between app.js and this server has already changed once,
+// and a stale cached app.js talking to a freshly-updated server (or vice
+// versa) silently breaks in confusing ways (e.g. the feed appearing stuck on
+// the same 5 posts). Not worth trading that confusion for the tiny perf win
+// of caching a few KB of static files.
+app.use(
+  express.static(path.join(__dirname, 'public'), {
+    etag: false,
+    lastModified: false,
+    setHeaders: (res) => res.set('Cache-Control', 'no-store'),
+  })
+);
 
 app.post('/api/generate-batch', async (req, res) => {
   try {
