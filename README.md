@@ -31,9 +31,11 @@ backend, vanilla HTML/CSS/JS frontend, no build step.
 3. Run the server:
 
    ```bash
-   npm start
-   # or, for auto-restart on file changes:
-   npm run dev
+   npm start              # foreground — Ctrl+C to stop
+   npm run dev             # foreground, auto-restarts on file changes
+   npm run start:bg        # background — doesn't need the terminal to stay open
+   npm run stop            # stops whatever `start:bg` started
+   npm run reset-feed      # clears data/posts.json so the feed regenerates fresh
    ```
 
 4. Open http://localhost:3000
@@ -44,19 +46,26 @@ All generated posts live in `data/posts.json`, a flat JSON array acting as a loc
 cache/database. This file is the source of truth the frontend actually reads from.
 
 - **The frontend never calls the Anthropic API directly.** It only calls your own
-  server (`GET /api/feed?page=N`), which reads from `data/posts.json`.
-- **A new batch is only generated when the cache runs dry.** `GET /api/feed?page=N`
-  checks whether the cache already has enough posts to serve that page. If it does,
-  it serves straight from the JSON file — **zero API calls**. If it doesn't, the
-  server makes exactly **one** Anthropic API call, which generates **10 posts in a
-  single request** (not 10 separate requests), appends them to `data/posts.json`,
+  server (`GET /api/feed?offset=N`), which reads from `data/posts.json`.
+- **A new batch is only generated when the cache runs dry.** `GET /api/feed?offset=N`
+  checks whether the cache already has enough posts to serve starting at `offset`. If
+  it does, it serves straight from the JSON file — **zero API calls**. If it doesn't,
+  the server makes exactly **one** Anthropic API call, which generates **10 posts in
+  a single request** (not 10 separate requests), appends them to `data/posts.json`,
   and then serves the page.
 - **Scrolling does not equal API calls.** You can refresh the page or scroll through
   cached posts as many times as you want with no additional cost — new generation
   only happens once you scroll past everything currently cached.
-- **Each generation call is capped** at `max_tokens: 900` and produces a fixed batch
-  of 10 posts using `claude-haiku-4-5` (Anthropic's cheapest/fastest model), so a
-  single generation call costs a small fraction of a cent.
+- **The frontend remembers how far you've scrolled** (in `localStorage`), so
+  reopening the app resumes at that offset instead of replaying the entire history
+  from post #1. If that saved offset is ever ahead of what the server can serve
+  (e.g. right after `npm run reset-feed`), the server falls back to serving the
+  latest posts instead of an empty feed.
+- **Each generation call is capped** at `max_tokens: 1000` and produces a fixed
+  batch of 10 posts using `claude-haiku-4-5` (Anthropic's cheapest/fastest model),
+  so a single generation call costs a small fraction of a cent. A single `/api/feed`
+  request will generate at most 5 batches (50 posts) even if a stale offset asks for
+  much more, so one request can't hang generating an unbounded amount.
 - **Every generation call is logged to the server console** with token usage and an
   estimated dollar cost, e.g.:
 
@@ -78,7 +87,7 @@ cache/database. This file is the source of truth the frontend actually reads fro
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/feed?page=N` | Serves 5 posts for page `N` from cache, generating a new batch of 10 first only if needed. |
+| `GET` | `/api/feed?offset=N` | Serves 5 posts starting at index `N` from cache, generating new batches of 10 first only if needed (capped at 5 batches/request). |
 | `POST` | `/api/generate-batch` | Directly triggers one generation call (10 posts), useful for manually testing generation quality/cost without the frontend. |
 | `GET` | `/api/stats` | Returns `{ apiCallsThisSession }`. |
 

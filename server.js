@@ -13,6 +13,7 @@ const MODEL = 'claude-haiku-4-5';
 const MAX_TOKENS = 1000; // capped per-call to control cost
 const BATCH_SIZE = 10; // posts generated per API call
 const PAGE_SIZE = 5; // posts served per feed page
+const MAX_BATCHES_PER_REQUEST = 5; // safety cap, see /api/feed
 
 const DATA_DIR = path.join(__dirname, 'data');
 const CACHE_FILE = path.join(DATA_DIR, 'posts.json');
@@ -244,25 +245,43 @@ app.post('/api/generate-batch', async (req, res) => {
 });
 
 app.get('/api/feed', async (req, res) => {
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const neededCount = page * PAGE_SIZE;
+  // The client tracks how many posts it has already shown (persisted in
+  // localStorage) and asks for the next PAGE_SIZE starting at that offset —
+  // this is what lets reopening the app resume where you left off instead
+  // of replaying the entire history from post #1 every time.
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const neededCount = offset + PAGE_SIZE;
 
   try {
     let cache = loadCache();
 
-    // Only generate when the cache can't satisfy this page yet, and only
-    // BATCH_SIZE at a time (never per-scroll, never one-off).
-    while (cache.length < neededCount) {
+    // Generate in batches until the cache can satisfy this offset, but cap
+    // how many batches a single request will generate. Without this cap, a
+    // stale offset (e.g. left over in localStorage from before `npm run
+    // reset-feed`) could force dozens of sequential Anthropic calls inside
+    // one HTTP request and hang for minutes.
+    let batchesThisRequest = 0;
+    while (cache.length < neededCount && batchesThisRequest < MAX_BATCHES_PER_REQUEST) {
       await generateBatch();
       cache = loadCache();
+      batchesThisRequest += 1;
     }
 
-    const start = (page - 1) * PAGE_SIZE;
-    const posts = cache.slice(start, start + PAGE_SIZE);
+    let posts = cache.slice(offset, offset + PAGE_SIZE);
+    let effectiveOffset = offset;
+
+    // The requested offset is beyond anything we could generate (almost
+    // always a stale/invalid resume pointer) -- fall back to the latest
+    // posts instead of returning nothing.
+    if (posts.length === 0 && cache.length > 0) {
+      effectiveOffset = Math.max(0, cache.length - PAGE_SIZE);
+      posts = cache.slice(effectiveOffset);
+    }
 
     res.json({
       posts,
-      page,
+      offset: effectiveOffset,
+      nextOffset: effectiveOffset + posts.length,
       pageSize: PAGE_SIZE,
       totalCached: cache.length,
       apiCallsThisSession: apiCallCount,

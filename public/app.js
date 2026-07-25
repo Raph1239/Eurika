@@ -4,7 +4,10 @@
   const template = document.getElementById('post-template');
   const counterEl = document.getElementById('dev-counter-value');
 
-  let nextPage = 1;
+  // Remember how far into the feed we've scrolled so reopening the app
+  // resumes there instead of replaying the entire history from post #1.
+  const RESUME_KEY = 'infiniscroll:resumeOffset';
+  let offset = parseInt(localStorage.getItem(RESUME_KEY), 10) || 0;
   let isLoading = false;
   let reachedEnd = false; // set true if the server ever returns zero posts
 
@@ -65,7 +68,7 @@
     showLoading(true);
 
     try {
-      const res = await fetch(`/api/feed?page=${nextPage}`);
+      const res = await fetch(`/api/feed?offset=${offset}`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -81,7 +84,8 @@
       }
 
       data.posts.forEach(renderPost);
-      nextPage += 1;
+      offset = data.nextOffset;
+      localStorage.setItem(RESUME_KEY, String(offset));
     } catch (err) {
       console.error('Failed to load feed page:', err);
       showErrorPost(err.message);
