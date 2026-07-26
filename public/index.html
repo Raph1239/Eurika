@@ -20,7 +20,25 @@
     API calls: <span id="dev-counter-value">0</span>
   </div>
 
+  <button id="stats-btn" type="button" aria-label="View your topic stats">
+    <svg viewBox="0 0 24 24" class="stats-icon">
+      <rect x="4" y="11" width="4" height="9" rx="1" />
+      <rect x="10" y="6" width="4" height="14" rx="1" />
+      <rect x="16" y="2" width="4" height="18" rx="1" />
+    </svg>
+  </button>
+
   <main id="feed"></main>
+
+  <div id="stats-overlay" class="stats-overlay hidden">
+    <div class="stats-panel">
+      <div class="stats-header">
+        <h2>Your Top Topics</h2>
+        <button id="stats-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="stats-body" class="stats-body"></div>
+    </div>
+  </div>
 
   <template id="post-template">
     <section class="post">
@@ -43,6 +61,13 @@
             <path
               d="M12 21s-6.72-4.36-9.33-8.2C.99 9.98 1.9 6 5.4 6c2.02 0 3.31 1.15 3.9 2.15C9.9 7.15 11.2 6 13.2 6c3.5 0 4.42 3.98 2.73 6.8C19.72 16.64 12 21 12 21z"
             />
+          </svg>
+        </button>
+        <button class="share-btn" type="button" aria-label="Share this post">
+          <svg class="share-icon" viewBox="0 0 24 24">
+            <polyline points="16 6 12 2 8 6" />
+            <line x1="12" y1="2" x2="12" y2="15" />
+            <path d="M20 15v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5" />
           </svg>
         </button>
       </div>

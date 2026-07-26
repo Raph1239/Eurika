@@ -6,8 +6,10 @@ backend, vanilla HTML/CSS/JS frontend, no build step.
 
 Heart a post (or double-tap it) to like it, or tap the X to mark it "not interested" —
 both feed into a simple recommendation algorithm that biases which topics show up more
-(or less) in future batches, entirely for free (see below). Installable to your phone's
-home screen as a standalone app (PWA).
+(or less) in future batches, entirely for free (see below). Tap the small chart icon
+(top-left) to see your top topics. Share a post via your phone's native share sheet, or
+it copies to your clipboard if sharing isn't supported. Installable to your phone's home
+screen as a standalone app (PWA), with haptic feedback on like/skip.
 
 ## Setup
 
@@ -111,6 +113,7 @@ cache/database. This file is the source of truth the frontend actually reads fro
 | `POST` | `/api/generate-batch` | Directly triggers one generation call (10 posts), useful for manually testing generation quality/cost without the frontend. |
 | `POST` | `/api/posts/:id/react` | Body `{ "reaction": "liked" \| "disliked" \| null }`. Never calls Anthropic. |
 | `GET` | `/api/stats` | Returns `{ apiCallsThisSession }`. |
+| `GET` | `/api/stats/topics` | Per-topic `{ topic, seen, likes, dislikes }`, sorted by net score. Powers the in-app stats view. Never calls Anthropic. |
 
 To test generation in isolation before touching the UI:
 

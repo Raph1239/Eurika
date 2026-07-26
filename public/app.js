@@ -3,6 +3,41 @@
   const loadingEl = document.getElementById('loading');
   const template = document.getElementById('post-template');
   const counterEl = document.getElementById('dev-counter-value');
+  const statsBtn = document.getElementById('stats-btn');
+  const statsOverlay = document.getElementById('stats-overlay');
+  const statsClose = document.getElementById('stats-close');
+  const statsBody = document.getElementById('stats-body');
+
+  // Deterministic color per topic string (no shared list with the server
+  // needed — same string always hashes to the same hue), reused for both
+  // the topic badge on each post and the bars in the stats view.
+  function hashStringToHue(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    return hash % 360;
+  }
+
+  function topicTextColor(topic) {
+    return `hsl(${hashStringToHue(topic)}, 70%, 72%)`;
+  }
+
+  function topicBgColor(topic) {
+    return `hsla(${hashStringToHue(topic)}, 70%, 55%, 0.16)`;
+  }
+
+  function vibrate(pattern) {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  }
+
+  function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    toast.addEventListener('animationend', () => toast.remove());
+    document.body.appendChild(toast);
+  }
 
   // Remember how far into the feed we've scrolled so reopening the app
   // resumes there instead of replaying the entire history from post #1.
@@ -30,35 +65,64 @@
   function renderPost(post) {
     const node = template.content.cloneNode(true);
     const postEl = node.querySelector('.post');
-    node.querySelector('.post-topic').textContent = post.topic || 'misc';
+    const topicEl = node.querySelector('.post-topic');
+    const topic = post.topic || 'misc';
+    topicEl.textContent = topic;
+    topicEl.style.color = topicTextColor(topic);
+    topicEl.style.background = topicBgColor(topic);
     node.querySelector('.post-text').textContent = post.text;
     node.querySelector('.post-author').textContent = post.author;
     node.querySelector('.post-timestamp').textContent = formatTimestamp(post.timestamp);
 
     const likeBtn = node.querySelector('.like-btn');
     const skipBtn = node.querySelector('.skip-btn');
+    const shareBtn = node.querySelector('.share-btn');
     applyReactionUI(likeBtn, skipBtn, post.reaction || null);
 
     likeBtn.addEventListener('click', () => {
       const next = currentReaction(likeBtn, skipBtn) === 'liked' ? null : 'liked';
       setReaction(post.id, likeBtn, skipBtn, next);
-      if (next === 'liked') burstHeart(postEl);
+      if (next === 'liked') {
+        burstHeart(postEl);
+        vibrate(15);
+      }
     });
     skipBtn.addEventListener('click', () => {
       const next = currentReaction(likeBtn, skipBtn) === 'disliked' ? null : 'disliked';
       setReaction(post.id, likeBtn, skipBtn, next);
+      if (next === 'disliked') vibrate([10, 30, 10]);
     });
+    shareBtn.addEventListener('click', () => sharePost(post));
 
     // Instagram-style double-tap-to-like anywhere on the post body (but not
     // on the action buttons themselves, which already have their own tap
     // handling above).
     attachDoubleTap(postEl, (target) => {
-      if (target.closest('.like-btn, .skip-btn')) return;
+      if (target.closest('.like-btn, .skip-btn, .share-btn')) return;
       setReaction(post.id, likeBtn, skipBtn, 'liked');
       burstHeart(postEl); // always show the burst, even if already liked
+      vibrate(15);
     });
 
     feedEl.appendChild(node);
+  }
+
+  async function sharePost(post) {
+    const shareText = `"${post.text}" — ${post.author} on InfiniScroll`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ text: shareText });
+      } catch (err) {
+        if (err.name !== 'AbortError') console.error('Share failed:', err);
+      }
+    } else if (navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(shareText);
+        showToast('Copied to clipboard');
+      } catch (err) {
+        console.error('Clipboard write failed:', err);
+      }
+    }
   }
 
   function currentReaction(likeBtn, skipBtn) {
@@ -227,5 +291,64 @@
     // In case the first page doesn't fill the viewport (e.g. large screens),
     // check immediately whether we already need page two.
     checkScrollPosition();
+  });
+
+  // ---------- Stats overlay ----------
+
+  function renderStatsRow(entry, maxAbsScore) {
+    const row = document.createElement('div');
+    row.className = 'stats-row';
+
+    const score = entry.likes - entry.dislikes;
+    const barWidthPct = maxAbsScore > 0 ? Math.max(4, (Math.abs(score) / maxAbsScore) * 100) : 4;
+    const barColor = score >= 0 ? topicTextColor(entry.topic) : 'var(--text-secondary)';
+
+    row.innerHTML = `
+      <div class="stats-row-label">
+        <span class="stats-row-topic" style="color: ${topicTextColor(entry.topic)}">${entry.topic}</span>
+        <span class="stats-row-counts">${entry.likes} &hearts; &middot; ${entry.dislikes} skipped</span>
+      </div>
+      <div class="stats-bar-track">
+        <div class="stats-bar-fill" style="width: ${barWidthPct}%; background: ${barColor}"></div>
+      </div>
+    `;
+    return row;
+  }
+
+  async function openStats() {
+    statsOverlay.classList.remove('hidden');
+    statsBody.innerHTML = '<div class="stats-empty">Loading&hellip;</div>';
+
+    try {
+      const res = await fetch('/api/stats/topics');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+
+      const topics = data.topics || [];
+      const engaged = topics.filter((t) => t.likes > 0 || t.dislikes > 0);
+
+      if (engaged.length === 0) {
+        statsBody.innerHTML =
+          '<div class="stats-empty">Heart or skip a few posts to see your trends here.</div>';
+        return;
+      }
+
+      const maxAbsScore = Math.max(...engaged.map((t) => Math.abs(t.likes - t.dislikes)));
+      statsBody.innerHTML = '';
+      engaged.forEach((entry) => statsBody.appendChild(renderStatsRow(entry, maxAbsScore)));
+    } catch (err) {
+      console.error('Failed to load stats:', err);
+      statsBody.innerHTML = '<div class="stats-empty">Couldn\'t load your stats right now.</div>';
+    }
+  }
+
+  function closeStats() {
+    statsOverlay.classList.add('hidden');
+  }
+
+  statsBtn.addEventListener('click', openStats);
+  statsClose.addEventListener('click', closeStats);
+  statsOverlay.addEventListener('click', (e) => {
+    if (e.target === statsOverlay) closeStats(); // click on the backdrop, not the panel
   });
 })();

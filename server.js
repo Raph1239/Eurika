@@ -141,6 +141,20 @@ const ANTI_REPEAT_WINDOW = 40;
 // Kept small — it's just a prompt hint, not extra API calls.
 const REACTION_EXAMPLES_WINDOW = 8;
 
+// Shared by the generation-time weighting below and the /api/stats/topics
+// endpoint, so the two never drift out of sync with each other.
+function getTopicCounts(cache) {
+  const seen = {};
+  const likes = {};
+  const dislikes = {};
+  for (const post of cache) {
+    seen[post.topic] = (seen[post.topic] || 0) + 1;
+    if (post.reaction === 'liked') likes[post.topic] = (likes[post.topic] || 0) + 1;
+    if (post.reaction === 'disliked') dislikes[post.topic] = (dislikes[post.topic] || 0) + 1;
+  }
+  return { seen, likes, dislikes };
+}
+
 /**
  * Gives every topic a weight of 1 (baseline, keeps exploration alive even
  * for topics with no signal yet), +1 per like, -1 per dislike, floored so a
@@ -149,17 +163,8 @@ const REACTION_EXAMPLES_WINDOW = 8;
  * which topics get assigned to the batch you were already about to generate.
  */
 function computeTopicWeights(cache) {
-  const likeCounts = {};
-  const dislikeCounts = {};
-  for (const post of cache) {
-    if (post.reaction === 'liked') likeCounts[post.topic] = (likeCounts[post.topic] || 0) + 1;
-    if (post.reaction === 'disliked') dislikeCounts[post.topic] = (dislikeCounts[post.topic] || 0) + 1;
-  }
-  return TOPICS.map((topic) => {
-    const likes = likeCounts[topic] || 0;
-    const dislikes = dislikeCounts[topic] || 0;
-    return Math.max(0.1, 1 + likes - dislikes);
-  });
+  const { likes, dislikes } = getTopicCounts(cache);
+  return TOPICS.map((topic) => Math.max(0.1, 1 + (likes[topic] || 0) - (dislikes[topic] || 0)));
 }
 
 // Weighted random permutation (roulette-wheel selection without
@@ -380,6 +385,24 @@ app.get('/api/feed', async (req, res) => {
 
 app.get('/api/stats', (req, res) => {
   res.json({ apiCallsThisSession: apiCallCount });
+});
+
+// Read-only view into the same counts the generator uses for weighting --
+// just reads the local cache, no Anthropic calls.
+app.get('/api/stats/topics', (req, res) => {
+  const cache = loadCache();
+  const { seen, likes, dislikes } = getTopicCounts(cache);
+
+  const topics = TOPICS.map((topic) => ({
+    topic,
+    seen: seen[topic] || 0,
+    likes: likes[topic] || 0,
+    dislikes: dislikes[topic] || 0,
+  }))
+    .filter((t) => t.seen > 0)
+    .sort((a, b) => (b.likes - b.dislikes) - (a.likes - a.dislikes) || b.likes - a.likes);
+
+  res.json({ topics });
 });
 
 // Setting a reaction never calls the Anthropic API -- it just sets a field
