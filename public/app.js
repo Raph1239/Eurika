@@ -29,38 +29,109 @@
 
   function renderPost(post) {
     const node = template.content.cloneNode(true);
+    const postEl = node.querySelector('.post');
     node.querySelector('.post-topic').textContent = post.topic || 'misc';
     node.querySelector('.post-text').textContent = post.text;
     node.querySelector('.post-author').textContent = post.author;
     node.querySelector('.post-timestamp').textContent = formatTimestamp(post.timestamp);
 
     const likeBtn = node.querySelector('.like-btn');
-    setLikeButtonState(likeBtn, !!post.liked);
-    likeBtn.addEventListener('click', () => toggleLike(post.id, likeBtn));
+    const skipBtn = node.querySelector('.skip-btn');
+    applyReactionUI(likeBtn, skipBtn, post.reaction || null);
+
+    likeBtn.addEventListener('click', () => {
+      const next = currentReaction(likeBtn, skipBtn) === 'liked' ? null : 'liked';
+      setReaction(post.id, likeBtn, skipBtn, next);
+      if (next === 'liked') burstHeart(postEl);
+    });
+    skipBtn.addEventListener('click', () => {
+      const next = currentReaction(likeBtn, skipBtn) === 'disliked' ? null : 'disliked';
+      setReaction(post.id, likeBtn, skipBtn, next);
+    });
+
+    // Instagram-style double-tap-to-like anywhere on the post body (but not
+    // on the action buttons themselves, which already have their own tap
+    // handling above).
+    attachDoubleTap(postEl, (target) => {
+      if (target.closest('.like-btn, .skip-btn')) return;
+      setReaction(post.id, likeBtn, skipBtn, 'liked');
+      burstHeart(postEl); // always show the burst, even if already liked
+    });
 
     feedEl.appendChild(node);
   }
 
-  function setLikeButtonState(likeBtn, liked) {
-    likeBtn.classList.toggle('liked', liked);
-    likeBtn.setAttribute('aria-pressed', String(liked));
+  function currentReaction(likeBtn, skipBtn) {
+    if (likeBtn.classList.contains('liked')) return 'liked';
+    if (skipBtn.classList.contains('active')) return 'disliked';
+    return null;
   }
 
-  async function toggleLike(postId, likeBtn) {
-    const newLiked = !likeBtn.classList.contains('liked');
-    setLikeButtonState(likeBtn, newLiked); // optimistic — feels instant
+  function applyReactionUI(likeBtn, skipBtn, reaction) {
+    likeBtn.classList.toggle('liked', reaction === 'liked');
+    likeBtn.setAttribute('aria-pressed', String(reaction === 'liked'));
+    skipBtn.classList.toggle('active', reaction === 'disliked');
+    skipBtn.setAttribute('aria-pressed', String(reaction === 'disliked'));
+  }
+
+  async function setReaction(postId, likeBtn, skipBtn, nextReaction) {
+    const prevReaction = currentReaction(likeBtn, skipBtn);
+    if (nextReaction === prevReaction) return; // no-op, nothing to send
+
+    applyReactionUI(likeBtn, skipBtn, nextReaction); // optimistic — feels instant
 
     try {
-      const res = await fetch(`/api/posts/${postId}/like`, {
+      const res = await fetch(`/api/posts/${postId}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ liked: newLiked }),
+        body: JSON.stringify({ reaction: nextReaction }),
       });
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
     } catch (err) {
-      console.error('Failed to save like:', err);
-      setLikeButtonState(likeBtn, !newLiked); // revert on failure
+      console.error('Failed to save reaction:', err);
+      applyReactionUI(likeBtn, skipBtn, prevReaction); // revert on failure
     }
+  }
+
+  function burstHeart(postEl) {
+    const burst = document.createElement('div');
+    burst.className = 'heart-burst';
+    burst.innerHTML =
+      '<svg viewBox="0 0 24 24"><path d="M12 21s-6.72-4.36-9.33-8.2C.99 9.98 1.9 6 5.4 6c2.02 0 3.31 1.15 3.9 2.15C9.9 7.15 11.2 6 13.2 6c3.5 0 4.42 3.98 2.73 6.8C19.72 16.64 12 21 12 21z"/></svg>';
+    burst.addEventListener('animationend', () => burst.remove());
+    postEl.appendChild(burst);
+  }
+
+  // Fires onDoubleTap(target) when two taps land within 300ms of each other
+  // and aren't just a scroll gesture (checked via a small movement
+  // threshold so a flick/scroll never gets misread as a tap).
+  function attachDoubleTap(el, onDoubleTap) {
+    let lastTapTime = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+    let downX = 0;
+    let downY = 0;
+
+    el.addEventListener('pointerdown', (e) => {
+      downX = e.clientX;
+      downY = e.clientY;
+    });
+
+    el.addEventListener('pointerup', (e) => {
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (moved > 10) return; // was a scroll/drag, not a tap
+
+      const now = Date.now();
+      const distanceFromLastTap = Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY);
+      if (now - lastTapTime < 300 && distanceFromLastTap < 40) {
+        onDoubleTap(e.target);
+        lastTapTime = 0; // consume, so a third quick tap doesn't re-trigger
+      } else {
+        lastTapTime = now;
+        lastTapX = e.clientX;
+        lastTapY = e.clientY;
+      }
+    });
   }
 
   function updateCounter(count) {

@@ -137,22 +137,29 @@ within it instead.`;
 // itself. Capped so prompt size stays small as the cache grows.
 const ANTI_REPEAT_WINDOW = 40;
 
-// How many liked post texts to show the model as style/tone examples. Kept
-// small — it's just a prompt hint, not extra API calls.
-const LIKED_EXAMPLES_WINDOW = 8;
+// How many liked/disliked post texts to show the model as tone examples.
+// Kept small — it's just a prompt hint, not extra API calls.
+const REACTION_EXAMPLES_WINDOW = 8;
 
 /**
- * Gives every topic a weight of 1 (baseline, keeps exploration alive for
- * topics never liked yet) plus one extra point per like it's ever received.
+ * Gives every topic a weight of 1 (baseline, keeps exploration alive even
+ * for topics with no signal yet), +1 per like, -1 per dislike, floored so a
+ * heavily-disliked topic is heavily suppressed but never fully excluded.
  * This is the entire "algorithm": no extra API calls, no ML, just biasing
  * which topics get assigned to the batch you were already about to generate.
  */
 function computeTopicWeights(cache) {
   const likeCounts = {};
+  const dislikeCounts = {};
   for (const post of cache) {
-    if (post.liked) likeCounts[post.topic] = (likeCounts[post.topic] || 0) + 1;
+    if (post.reaction === 'liked') likeCounts[post.topic] = (likeCounts[post.topic] || 0) + 1;
+    if (post.reaction === 'disliked') dislikeCounts[post.topic] = (dislikeCounts[post.topic] || 0) + 1;
   }
-  return TOPICS.map((topic) => 1 + (likeCounts[topic] || 0));
+  return TOPICS.map((topic) => {
+    const likes = likeCounts[topic] || 0;
+    const dislikes = dislikeCounts[topic] || 0;
+    return Math.max(0.1, 1 + likes - dislikes);
+  });
 }
 
 // Weighted random permutation (roulette-wheel selection without
@@ -202,14 +209,23 @@ async function generateBatch() {
     .join('\n');
 
   const likedTexts = cache
-    .filter((p) => p.liked)
-    .slice(-LIKED_EXAMPLES_WINDOW)
+    .filter((p) => p.reaction === 'liked')
+    .slice(-REACTION_EXAMPLES_WINDOW)
     .map((p) => p.text);
   const likedBlock = likedTexts.length
     ? `\n\nThe user hearted these previous posts — lean into a similar tone/energy where it fits the ` +
       `assigned topic (but never repeat them or their wording):\n${likedTexts
         .map((t) => `- ${t}`)
         .join('\n')}`
+    : '';
+
+  const dislikedTexts = cache
+    .filter((p) => p.reaction === 'disliked')
+    .slice(-REACTION_EXAMPLES_WINDOW)
+    .map((p) => p.text);
+  const dislikedBlock = dislikedTexts.length
+    ? `\n\nThe user marked these previous posts "not interested" — avoid this angle/tone, even for a ` +
+      `topic that overlaps:\n${dislikedTexts.map((t) => `- ${t}`).join('\n')}`
     : '';
 
   const response = await client.messages.create({
@@ -225,7 +241,8 @@ async function generateBatch() {
           `${topicAssignments}\n\n` +
           `Every post must be a genuinely new idea, not a rewrite of anything already posted.` +
           antiRepeatBlock +
-          likedBlock,
+          likedBlock +
+          dislikedBlock,
       },
     ],
     output_config: {
@@ -257,7 +274,7 @@ async function generateBatch() {
     text: String(p.text || '').trim(),
     author: String(p.author || '@anonymous').trim(),
     topic: String(p.topic || 'misc').trim(),
-    liked: false,
+    reaction: null, // 'liked' | 'disliked' | null
     // Stagger timestamps slightly so posts in a batch don't share one instant.
     timestamp: new Date(now - i * 1000).toISOString(),
   }));
@@ -365,13 +382,18 @@ app.get('/api/stats', (req, res) => {
   res.json({ apiCallsThisSession: apiCallCount });
 });
 
-// Toggling a like never calls the Anthropic API -- it just flips a flag on
-// the cached post. The "algorithm" effect comes later, the next time a
-// batch is generated: pickBatchTopics() reads these flags to bias topic
-// selection toward whatever the user has been hearting.
-app.post('/api/posts/:id/like', (req, res) => {
+// Setting a reaction never calls the Anthropic API -- it just sets a field
+// on the cached post. The "algorithm" effect comes later, the next time a
+// batch is generated: pickBatchTopics() / computeTopicWeights() read these
+// flags to bias topic selection toward what's been liked and away from
+// what's been marked not-interested.
+app.post('/api/posts/:id/react', (req, res) => {
   const { id } = req.params;
-  const liked = !!req.body.liked;
+  const { reaction } = req.body;
+
+  if (reaction !== 'liked' && reaction !== 'disliked' && reaction !== null) {
+    return res.status(400).json({ error: 'reaction must be "liked", "disliked", or null' });
+  }
 
   try {
     const cache = loadCache();
@@ -379,11 +401,11 @@ app.post('/api/posts/:id/like', (req, res) => {
     if (!post) {
       return res.status(404).json({ error: 'Post not found' });
     }
-    post.liked = liked;
+    post.reaction = reaction;
     saveCache(cache);
-    res.json({ id, liked });
+    res.json({ id, reaction });
   } catch (err) {
-    console.error('like error:', err);
+    console.error('react error:', err);
     res.status(500).json({ error: err.message });
   }
 });
