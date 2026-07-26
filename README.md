@@ -41,7 +41,15 @@ home screen as a standalone app (PWA).
    npm run start:bg        # background — doesn't need the terminal to stay open
    npm run stop            # stops whatever `start:bg` started
    npm run reset-feed      # clears data/posts.json so the feed regenerates fresh
+   npm run update          # stop -> git pull -> start:bg (everyday "get latest code")
+   npm run update:reset    # same, but also reset-feed first (wipes cache + all likes/skips)
    ```
+
+   `update` is the one-liner for "pull whatever Claude just pushed and restart." It
+   deliberately does **not** clear `data/posts.json` — that would silently wipe every
+   post you've hearted or skipped, which feeds the recommendation algorithm. Only
+   reach for `update:reset` when you specifically want a clean slate (e.g. right after
+   a fix to post generation that needs old, now-stale cached posts cleared out).
 
 4. Open http://localhost:3000
 

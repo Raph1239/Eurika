@@ -9,7 +9,9 @@
     "start:bg": "nohup node server.js > server.log 2>&1 & echo $! > .server.pid && sleep 1 && echo \"InfiniScroll running in background (PID $(cat .server.pid)). Logs: tail -f server.log | Stop: npm run stop\"",
     "stop": "([ -f .server.pid ] && kill $(cat .server.pid) 2>/dev/null && rm -f .server.pid && echo 'Stopped InfiniScroll.') || echo 'Not running (no .server.pid found).'",
     "reset-feed": "rm -f data/posts.json && echo 'Cleared data/posts.json -- next feed request will regenerate from scratch.'",
-    "icons": "node scripts/generate-icons.js"
+    "icons": "node scripts/generate-icons.js",
+    "update": "npm run stop && git pull && npm run start:bg",
+    "update:reset": "npm run stop && npm run reset-feed && git pull && npm run start:bg"
   },
   "repository": {
     "type": "git",
