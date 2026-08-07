@@ -10,7 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const MODEL = 'claude-haiku-4-5';
-const MAX_TOKENS = 1000; // capped per-call to control cost
+const MAX_TOKENS = 1400; // capped per-call to control cost; higher now that replies add output
 const BATCH_SIZE = 10; // posts generated per API call
 const PAGE_SIZE = 5; // posts served per feed page
 const MAX_BATCHES_PER_REQUEST = 5; // safety cap, see /api/feed
@@ -87,6 +87,60 @@ const TOPICS = [
   'gaming',
 ];
 
+// A fixed roster of recurring personas instead of a fresh random handle per
+// post. Real social feeds feel social because you recognize accounts —
+// picking from a stable cast (and letting likes/dislikes bias which of them
+// show up more) gets that for free, no extra API calls. `topics` are just a
+// preference for which posts a persona tends to get assigned to; it's not
+// exclusive (see pickAuthorForTopic's fallback).
+const AUTHORS = [
+  { handle: '@quantum_muffin', voice: 'sarcastic physicist who explains everything through baking metaphors', topics: ['science', 'tech', 'food'] },
+  { handle: '@grandma_online', voice: 'wholesome grandmother thrilled to have just discovered the internet', topics: ['life-advice', 'internet-culture', 'health'] },
+  { handle: '@doomer_economist', voice: 'deadpan economist who finds dark humor in every statistic', topics: ['money', 'hot-take', 'history'] },
+  { handle: '@caffeinated_founder', voice: 'chronically online startup founder who calls everything a disruption', topics: ['tech', 'future-tech', 'money'] },
+  { handle: '@cryptid_hunter', voice: 'earnest, wide-eyed cryptid and bigfoot enthusiast', topics: ['weird-laws', 'nature', 'geography'] },
+  { handle: '@zen_but_tired', voice: 'minimalist monk persona who sounds completely exhausted', topics: ['life-advice', 'psychology', 'health'] },
+  { handle: '@chaos_gremlin_gamer', voice: 'hyperactive gamer who narrates life in gaming lingo', topics: ['gaming', 'internet-culture', 'joke'] },
+  { handle: '@victorian_gentleman', voice: 'overly formal 1800s aristocrat sharing trivia', topics: ['history', 'ancient-world', 'language'] },
+  { handle: '@space_janitor', voice: 'deadpan janitor who insists he works at NASA', topics: ['space', 'science', 'future-tech'] },
+  { handle: '@feral_raccoon', voice: 'unhinged, chaotic raccoon-brained energy', topics: ['animals', 'joke', 'hot-take'] },
+  { handle: '@midnight_snacker', voice: 'food-obsessed insomniac posting at 3am', topics: ['food', 'joke', 'health'] },
+  { handle: '@stat_nerd_99', voice: 'obsessed with obscure, oddly specific statistics', topics: ['random-fact', 'sports', 'geography'] },
+  { handle: '@retired_pirate', voice: 'talks like a retired pirate, oddly wise', topics: ['history', 'geography', 'hot-take'] },
+  { handle: '@overly_honest_therapist', voice: 'blunt therapist who overshares professional opinions', topics: ['psychology', 'life-advice', 'hot-take'] },
+  { handle: '@glitch_in_the_matrix', voice: 'terminally online, speaks almost entirely in meme logic', topics: ['internet-culture', 'tech', 'joke'] },
+  { handle: '@backyard_astronomer', voice: 'enthusiastic amateur stargazer with a cheap telescope', topics: ['space', 'nature', 'science'] },
+  { handle: '@couch_philosopher', voice: 'delivers pseudo-deep 3am thoughts with total confidence', topics: ['hot-take', 'psychology', 'life-advice'] },
+  { handle: '@linguist_lurker', voice: 'obsessed with strange word origins and etymology', topics: ['language', 'history', 'random-fact'] },
+  { handle: '@future_fossil', voice: 'imagines how future archaeologists will judge us', topics: ['future-tech', 'hot-take', 'ancient-world'] },
+  { handle: '@gym_bro_socrates', voice: 'fitness bro who quotes ancient philosophy unprompted', topics: ['health', 'life-advice', 'joke'] },
+  { handle: '@legal_loophole_larry', voice: 'obsessed with bizarre, real-sounding obscure laws', topics: ['weird-laws', 'hot-take', 'geography'] },
+  { handle: '@movie_marathon_mel', voice: 'cannot stop referencing movies for absolutely everything', topics: ['movies-and-tv', 'joke', 'internet-culture'] },
+  { handle: '@broke_but_bougie', voice: 'overshares chaotic personal finance decisions with pride', topics: ['money', 'joke', 'life-advice'] },
+  { handle: '@wildlife_narrator', voice: 'narrates mundane human life like a nature documentary', topics: ['animals', 'nature', 'joke'] },
+  { handle: '@insomniac_scientist', voice: 'unhinged 3am lab-brain scientific tangents', topics: ['science', 'random-fact', 'tech'] },
+  { handle: '@globe_trotter_ghost', voice: 'self-proclaimed world traveler with dubious claims', topics: ['geography', 'history', 'hot-take'] },
+  { handle: '@retro_gamer_gran', voice: 'grandmother unexpectedly deep into retro video games', topics: ['gaming', 'internet-culture', 'life-advice'] },
+  { handle: '@sports_stat_sage', voice: 'deadpan obsessive over obscure sports trivia', topics: ['sports', 'random-fact', 'hot-take'] },
+  { handle: '@ancient_meme_lord', voice: 'makes memes and jokes specifically about ancient history', topics: ['ancient-world', 'history', 'joke'] },
+  { handle: '@ai_skeptic_dave', voice: 'everyman deeply skeptical of AI and tech hype', topics: ['tech', 'future-tech', 'hot-take'] },
+];
+
+const AUTHOR_HANDLES = AUTHORS.map((a) => a.handle);
+
+const REPLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    author: { type: 'string', enum: AUTHOR_HANDLES },
+    text: {
+      type: 'string',
+      description: 'A short, in-character one-sentence reply, under 15 words.',
+    },
+  },
+  required: ['author', 'text'],
+  additionalProperties: false,
+};
+
 const POST_SCHEMA = {
   type: 'object',
   properties: {
@@ -101,12 +155,17 @@ const POST_SCHEMA = {
           },
           author: {
             type: 'string',
-            description:
-              'A fictional social-handle style author, e.g. "@quantum_muffin" or "@night_owl_dev".',
+            enum: AUTHOR_HANDLES,
           },
           topic: {
             type: 'string',
             enum: TOPICS,
+          },
+          replies: {
+            type: 'array',
+            description:
+              'Only include when instructed for this slot. 1-2 short in-character replies from OTHER accounts in the roster.',
+            items: REPLY_SCHEMA,
           },
         },
         required: ['text', 'author', 'topic'],
@@ -118,20 +177,29 @@ const POST_SCHEMA = {
   additionalProperties: false,
 };
 
-const SYSTEM_PROMPT = `You write short posts for a fictional text-only social feed called InfiniScroll.
+const SYSTEM_PROMPT = `You write short posts for a fictional text-only social feed called InfiniScroll,
+populated by a fixed cast of recurring accounts, each with their own personality/voice.
+
 Each post must be 1-3 sentences, punchy, and self-contained — aim for under 30 words per post, no
-exceptions. Invent a distinct, believable social-handle-style author for each post (never a real
-person). Keep it safe for a general audience. Be concise everywhere — there is a strict output token
+exceptions. Keep it safe for a general audience. Be concise everywhere — there is a strict output token
 budget.
+
+Every post slot is assigned a specific author and a one-line voice/personality description for that
+account. Write the post text fully in that account's distinct voice — not a generic post that happens to
+have their name on it. Each post's "author" field must exactly equal the assigned handle, and its "topic"
+field must exactly equal the assigned topic (don't force an unrelated idea into it; find a genuine angle
+within it instead).
+
+A few slots are marked for replies: for those, add a "replies" array with 1-2 short in-character reactions
+from OTHER accounts in the roster (never the same account replying to itself), written in each replying
+account's own distinct voice. Leave "replies" out entirely for slots not marked for it.
 
 Variety is critical — this feed is generated in many separate batches over time, and near-duplicate
 posts (same idea reworded, same joke structure, same fact from a different angle) are a hard failure.
 Within a batch and across batches: never reuse an idea, fact, or joke premise you've already used; never
 start two posts with the same first three words; avoid leaning on the same few crutch openers like
 "Hot take:", "Fun fact:", "Did you know", or "PSA:" more than once per batch — most posts shouldn't use
-a label prefix at all. Vary sentence structure and rhythm, not just topic. Each post's "topic" field must
-match its actual content — don't force an unrelated idea into an assigned topic; find a genuine angle
-within it instead.`;
+a label prefix at all. Vary sentence structure and rhythm, not just topic.`;
 
 // How many recently-generated posts to show the model so it avoids repeating
 // itself. Capped so prompt size stays small as the cache grows.
@@ -194,6 +262,38 @@ function pickBatchTopics(cache) {
   return Array.from({ length: BATCH_SIZE }, (_, i) => shuffled[i % shuffled.length]);
 }
 
+// Same idea as getTopicCounts, but keyed by author handle -- so liking a
+// specific persona's posts makes that persona show up more often too, not
+// just their topics.
+function getAuthorCounts(cache) {
+  const likes = {};
+  const dislikes = {};
+  for (const post of cache) {
+    if (post.reaction === 'liked') likes[post.author] = (likes[post.author] || 0) + 1;
+    if (post.reaction === 'disliked') dislikes[post.author] = (dislikes[post.author] || 0) + 1;
+  }
+  return { likes, dislikes };
+}
+
+// Prefers an author whose declared topics include the assigned one, weighted
+// by that author's own like/dislike history; falls back to the full roster
+// if no author lists this topic as a preference.
+function pickAuthorForTopic(topic, authorCounts) {
+  const candidates = AUTHORS.filter((a) => a.topics.includes(topic));
+  const pool = (candidates.length ? candidates : AUTHORS).map((author) => {
+    const likes = authorCounts.likes[author.handle] || 0;
+    const dislikes = authorCounts.dislikes[author.handle] || 0;
+    return { author, weight: Math.max(0.1, 1 + likes - dislikes) };
+  });
+  const totalWeight = pool.reduce((sum, p) => sum + p.weight, 0);
+  let r = Math.random() * totalWeight;
+  for (const p of pool) {
+    r -= p.weight;
+    if (r <= 0) return p.author;
+  }
+  return pool[pool.length - 1].author;
+}
+
 /**
  * Calls the Anthropic API once to generate a batch of BATCH_SIZE posts,
  * appends them (with server-assigned id/timestamp) to the on-disk cache,
@@ -209,8 +309,26 @@ async function generateBatch() {
     : '';
 
   const batchTopics = pickBatchTopics(cache);
+  const authorCounts = getAuthorCounts(cache);
+  const batchAuthors = batchTopics.map((topic) => pickAuthorForTopic(topic, authorCounts));
+
+  // A handful of slots get asked for a couple of in-character replies from
+  // other accounts, so the feed doesn't feel like every post exists in a
+  // vacuum. Not every post -- real feeds don't have comments on everything.
+  const REPLY_SLOT_COUNT = Math.min(4, BATCH_SIZE);
+  const replySlots = new Set();
+  while (replySlots.size < REPLY_SLOT_COUNT) {
+    replySlots.add(Math.floor(Math.random() * BATCH_SIZE));
+  }
+
   const topicAssignments = batchTopics
-    .map((topic, i) => `${i + 1}. ${topic}`)
+    .map((topic, i) => {
+      const author = batchAuthors[i];
+      const replyNote = replySlots.has(i)
+        ? ' -- include 1-2 short in-character replies from other accounts'
+        : '';
+      return `${i + 1}. topic: ${topic} | author: ${author.handle} (${author.voice})${replyNote}`;
+    })
     .join('\n');
 
   const likedTexts = cache
@@ -241,8 +359,9 @@ async function generateBatch() {
       {
         role: 'user',
         content:
-          `Generate exactly ${BATCH_SIZE} new posts as a JSON object matching the schema, in this ` +
-          `exact topic order (post N's "topic" field must equal the assigned topic for slot N):\n` +
+          `Generate exactly ${BATCH_SIZE} new posts as a JSON object matching the schema, using this ` +
+          `exact slot order (post N's "topic" and "author" fields must exactly equal the assignment ` +
+          `for slot N):\n` +
           `${topicAssignments}\n\n` +
           `Every post must be a genuinely new idea, not a rewrite of anything already posted.` +
           antiRepeatBlock +
@@ -277,9 +396,15 @@ async function generateBatch() {
   const newPosts = rawPosts.map((p, i) => ({
     id: crypto.randomUUID(),
     text: String(p.text || '').trim(),
-    author: String(p.author || '@anonymous').trim(),
+    author: String(p.author || AUTHOR_HANDLES[0]).trim(),
     topic: String(p.topic || 'misc').trim(),
     reaction: null, // 'liked' | 'disliked' | null
+    replies: Array.isArray(p.replies)
+      ? p.replies
+          .slice(0, 3)
+          .map((r) => ({ author: String(r.author || '').trim(), text: String(r.text || '').trim() }))
+          .filter((r) => r.text && r.author)
+      : [],
     // Stagger timestamps slightly so posts in a batch don't share one instant.
     timestamp: new Date(now - i * 1000).toISOString(),
   }));
@@ -403,6 +528,15 @@ app.get('/api/stats/topics', (req, res) => {
     .sort((a, b) => (b.likes - b.dislikes) - (a.likes - a.dislikes) || b.likes - a.likes);
 
   res.json({ topics });
+});
+
+// This is deliberately "your liked posts," not a crowd-sourced "trending" --
+// there's only one user, so there's no real popularity signal beyond your
+// own reactions. Newest-created liked post first. Never calls Anthropic.
+app.get('/api/liked', (req, res) => {
+  const cache = loadCache();
+  const posts = cache.filter((p) => p.reaction === 'liked').reverse();
+  res.json({ posts });
 });
 
 // Setting a reaction never calls the Anthropic API -- it just sets a field

@@ -7,10 +7,12 @@
   const statsOverlay = document.getElementById('stats-overlay');
   const statsClose = document.getElementById('stats-close');
   const statsBody = document.getElementById('stats-body');
+  const favoritesBtn = document.getElementById('favorites-btn');
+  const favoritesFeedEl = document.getElementById('favorites-feed');
 
-  // Deterministic color per topic string (no shared list with the server
-  // needed — same string always hashes to the same hue), reused for both
-  // the topic badge on each post and the bars in the stats view.
+  // Deterministic color per string (no shared list with the server needed —
+  // the same string always hashes to the same hue), reused for the topic
+  // badge, author avatars, reply author names, and the stats view bars.
   function hashStringToHue(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -19,12 +21,12 @@
     return hash % 360;
   }
 
-  function topicTextColor(topic) {
-    return `hsl(${hashStringToHue(topic)}, 70%, 72%)`;
+  function hashTextColor(str) {
+    return `hsl(${hashStringToHue(str)}, 70%, 72%)`;
   }
 
-  function topicBgColor(topic) {
-    return `hsla(${hashStringToHue(topic)}, 70%, 55%, 0.16)`;
+  function hashBgColor(str) {
+    return `hsla(${hashStringToHue(str)}, 70%, 55%, 0.16)`;
   }
 
   function vibrate(pattern) {
@@ -62,26 +64,60 @@
     return timeFormatter.format(diffDays, 'day');
   }
 
-  function renderPost(post) {
+  function renderAvatar(avatarEl, author) {
+    const initial = (author || '?').replace('@', '').charAt(0).toUpperCase();
+    avatarEl.textContent = initial;
+    avatarEl.style.background = hashBgColor(author);
+    avatarEl.style.color = hashTextColor(author);
+  }
+
+  function renderReplies(container, replies) {
+    container.innerHTML = ''; // safe: only ever holds nodes we build below
+    if (!Array.isArray(replies) || replies.length === 0) return;
+    replies.slice(0, 2).forEach((reply) => {
+      const row = document.createElement('div');
+      row.className = 'reply-row';
+      const authorSpan = document.createElement('span');
+      authorSpan.className = 'reply-author';
+      authorSpan.textContent = reply.author;
+      authorSpan.style.color = hashTextColor(reply.author);
+      row.appendChild(authorSpan);
+      row.appendChild(document.createTextNode(reply.text));
+      container.appendChild(row);
+    });
+  }
+
+  function renderPost(post, container) {
     const node = template.content.cloneNode(true);
     const postEl = node.querySelector('.post');
     const topicEl = node.querySelector('.post-topic');
     const topic = post.topic || 'misc';
     topicEl.textContent = topic;
-    topicEl.style.color = topicTextColor(topic);
-    topicEl.style.background = topicBgColor(topic);
+    topicEl.style.color = hashTextColor(topic);
+    topicEl.style.background = hashBgColor(topic);
     node.querySelector('.post-text').textContent = post.text;
+    renderAvatar(node.querySelector('.post-avatar'), post.author);
     node.querySelector('.post-author').textContent = post.author;
     node.querySelector('.post-timestamp').textContent = formatTimestamp(post.timestamp);
+    renderReplies(node.querySelector('.post-replies'), post.replies);
 
     const likeBtn = node.querySelector('.like-btn');
     const skipBtn = node.querySelector('.skip-btn');
     const shareBtn = node.querySelector('.share-btn');
     applyReactionUI(likeBtn, skipBtn, post.reaction || null);
 
+    // In the favorites view, un-liking a post should make it disappear from
+    // that list immediately, matching how a "liked posts" view behaves
+    // elsewhere -- this only removes the card, never calls the API twice.
+    function removeFromFavoritesIfNeeded(reaction) {
+      if (container === favoritesFeedEl && reaction !== 'liked') {
+        postEl.remove();
+      }
+    }
+
     likeBtn.addEventListener('click', () => {
       const next = currentReaction(likeBtn, skipBtn) === 'liked' ? null : 'liked';
-      setReaction(post.id, likeBtn, skipBtn, next);
+      setReaction(post.id, likeBtn, skipBtn, next).then(() => removeFromFavoritesIfNeeded(next));
       if (next === 'liked') {
         burstHeart(postEl);
         vibrate(15);
@@ -89,7 +125,7 @@
     });
     skipBtn.addEventListener('click', () => {
       const next = currentReaction(likeBtn, skipBtn) === 'disliked' ? null : 'disliked';
-      setReaction(post.id, likeBtn, skipBtn, next);
+      setReaction(post.id, likeBtn, skipBtn, next).then(() => removeFromFavoritesIfNeeded(next));
       if (next === 'disliked') vibrate([10, 30, 10]);
     });
     shareBtn.addEventListener('click', () => sharePost(post));
@@ -104,7 +140,7 @@
       vibrate(15);
     });
 
-    feedEl.appendChild(node);
+    container.appendChild(node);
   }
 
   async function sharePost(post) {
@@ -245,7 +281,7 @@
         return;
       }
 
-      data.posts.forEach(renderPost);
+      data.posts.forEach((p) => renderPost(p, feedEl));
       offset = data.nextOffset;
       localStorage.setItem(RESUME_KEY, String(offset));
     } catch (err) {
@@ -301,11 +337,11 @@
 
     const score = entry.likes - entry.dislikes;
     const barWidthPct = maxAbsScore > 0 ? Math.max(4, (Math.abs(score) / maxAbsScore) * 100) : 4;
-    const barColor = score >= 0 ? topicTextColor(entry.topic) : 'var(--text-secondary)';
+    const barColor = score >= 0 ? hashTextColor(entry.topic) : 'var(--text-secondary)';
 
     row.innerHTML = `
       <div class="stats-row-label">
-        <span class="stats-row-topic" style="color: ${topicTextColor(entry.topic)}">${entry.topic}</span>
+        <span class="stats-row-topic" style="color: ${hashTextColor(entry.topic)}">${entry.topic}</span>
         <span class="stats-row-counts">${entry.likes} &hearts; &middot; ${entry.dislikes} skipped</span>
       </div>
       <div class="stats-bar-track">
@@ -350,5 +386,46 @@
   statsClose.addEventListener('click', closeStats);
   statsOverlay.addEventListener('click', (e) => {
     if (e.target === statsOverlay) closeStats(); // click on the backdrop, not the panel
+  });
+
+  // ---------- Favorites view ----------
+  // A "your liked posts" view, not a crowd-sourced trending list -- there's
+  // only one user here, so there's no real popularity signal beyond your own
+  // reactions. Reuses renderPost/setReaction as-is, just targeting a second
+  // feed container that's shown/hidden instead of destroying the live one
+  // (so switching back preserves your scroll position in the live feed).
+
+  let inFavoritesMode = false;
+
+  async function loadFavorites() {
+    favoritesFeedEl.innerHTML = '<div class="end-of-feed">Loading&hellip;</div>';
+
+    try {
+      const res = await fetch('/api/liked');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+
+      favoritesFeedEl.innerHTML = '';
+      if (!data.posts || data.posts.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'end-of-feed';
+        empty.textContent = "You haven't hearted anything yet.";
+        favoritesFeedEl.appendChild(empty);
+        return;
+      }
+      data.posts.forEach((p) => renderPost(p, favoritesFeedEl));
+    } catch (err) {
+      console.error('Failed to load favorites:', err);
+      favoritesFeedEl.innerHTML = '<div class="end-of-feed">Couldn\'t load your favorites right now.</div>';
+    }
+  }
+
+  favoritesBtn.addEventListener('click', () => {
+    inFavoritesMode = !inFavoritesMode;
+    favoritesBtn.classList.toggle('active', inFavoritesMode);
+    favoritesBtn.setAttribute('aria-pressed', String(inFavoritesMode));
+    feedEl.classList.toggle('feed-hidden', inFavoritesMode);
+    favoritesFeedEl.classList.toggle('feed-hidden', !inFavoritesMode);
+    if (inFavoritesMode) loadFavorites();
   });
 })();

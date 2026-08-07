@@ -24,7 +24,14 @@ html, body {
   overscroll-behavior-y: none;
 }
 
-#feed {
+/* Plain display:none hide, distinct from .loading.hidden / .stats-overlay.hidden
+   which rely on an opacity transition -- a shared ".hidden" class would fight
+   those (display:none can't be transitioned and would kill the fade). */
+.feed-hidden {
+  display: none;
+}
+
+.feed {
   height: 100vh;
   height: 100svh;
   overflow-y: scroll;
@@ -79,6 +86,18 @@ html, body {
   font-size: 0.9rem;
 }
 
+.post-avatar {
+  width: 1.6em;
+  height: 1.6em;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75em;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
 .post-author {
   color: var(--text-primary);
   font-weight: 600;
@@ -90,6 +109,34 @@ html, body {
 
 .post-timestamp {
   opacity: 0.75;
+}
+
+.post-replies {
+  max-width: 30rem;
+  width: 100%;
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.post-replies:empty {
+  display: none;
+}
+
+.reply-row {
+  line-height: 1.4;
+}
+
+.reply-row + .reply-row {
+  margin-top: 0.3rem;
+}
+
+.reply-author {
+  font-weight: 600;
+  margin-right: 0.3em;
 }
 
 .action-rail {
@@ -281,14 +328,20 @@ html, body {
   text-align: center;
 }
 
-#stats-btn {
+#corner-nav {
   position: fixed;
   top: env(safe-area-inset-top, 0);
   left: 0;
   z-index: 100;
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem;
+}
+
+#stats-btn,
+#favorites-btn {
   width: 2.4rem;
   height: 2.4rem;
-  margin: 0.5rem;
   border: 1px solid var(--card-border);
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
@@ -304,6 +357,24 @@ html, body {
   width: 1.1rem;
   height: 1.1rem;
   fill: var(--accent);
+}
+
+.favorites-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+}
+
+#favorites-btn.active {
+  background: rgba(255, 77, 109, 0.18);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+
+#favorites-btn.active .favorites-icon {
+  fill: #ff4d6d;
+  stroke: #ff4d6d;
 }
 
 .stats-overlay {

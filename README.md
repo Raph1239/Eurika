@@ -5,11 +5,14 @@ text (hot takes, random facts, jokes, tech takes) instead of photos. Node.js/Exp
 backend, vanilla HTML/CSS/JS frontend, no build step.
 
 Heart a post (or double-tap it) to like it, or tap the X to mark it "not interested" —
-both feed into a simple recommendation algorithm that biases which topics show up more
-(or less) in future batches, entirely for free (see below). Tap the small chart icon
-(top-left) to see your top topics. Share a post via your phone's native share sheet, or
-it copies to your clipboard if sharing isn't supported. Installable to your phone's home
-screen as a standalone app (PWA), with haptic feedback on like/skip.
+both feed into a simple recommendation algorithm that biases which topics *and which
+recurring accounts* show up more (or less) in future batches, entirely for free (see
+below). Posts come from a fixed cast of ~30 recurring personas instead of a random
+handle every time, and some posts have a couple of in-character replies. Tap the chart
+icon (top-left) for your top topics, or the heart icon next to it for your liked-posts
+view. Share a post via your phone's native share sheet, or it copies to your clipboard
+if sharing isn't supported. Installable to your phone's home screen as a standalone app
+(PWA), with haptic feedback on like/skip.
 
 ## Setup
 
@@ -52,6 +55,18 @@ screen as a standalone app (PWA), with haptic feedback on like/skip.
    post you've hearted or skipped, which feeds the recommendation algorithm. Only
    reach for `update:reset` when you specifically want a clean slate (e.g. right after
    a fix to post generation that needs old, now-stale cached posts cleared out).
+
+   Want `npm run update` to run automatically every time you open a terminal in this
+   Codespace, instead of typing it yourself? Run this **once**:
+
+   ```bash
+   bash scripts/setup-auto-update.sh
+   ```
+
+   It appends a small guarded snippet to `~/.bashrc` that runs `npm run update` the
+   first time a new terminal opens (per Codespace container), then does nothing on
+   any additional tabs/terminals you open after that. Safe to re-run — it detects
+   the snippet is already there and skips re-adding it.
 
 4. Open http://localhost:3000
 
@@ -100,10 +115,24 @@ cache/database. This file is the source of truth the frontend actually reads fro
 - **Hearting/skipping a post never calls the Anthropic API either.** It just sets a
   `reaction` field on that post in the cache. The recommendation algorithm only kicks
   in the next time a batch is generated anyway: each of the 10 post slots in a batch
-  gets assigned a topic via a weighted random draw, where a topic's weight is
-  `1 + likes - dislikes` (floored so a disliked topic is heavily suppressed but never
-  fully excluded). No extra API calls, no ML — just biasing a choice inside the
-  generation call you were already about to make.
+  gets assigned a topic *and* an author via a weighted random draw, where a topic's
+  (or author's) weight is `1 + likes - dislikes` (floored so a disliked one is heavily
+  suppressed but never fully excluded). No extra API calls, no ML — just biasing a
+  choice inside the generation call you were already about to make.
+- **Replies cost almost nothing extra either.** A handful of the 10 post slots per
+  batch are asked for 1-2 short in-character replies from other accounts in the
+  roster, generated in the same API call — a few more output tokens on a call you
+  were already making, not a separate request per reply.
+
+### Recurring authors
+
+Instead of a random throwaway handle per post, every post is written by one of ~30
+fixed personas (`AUTHORS` in `server.js`), each with a short personality/voice
+description and a few preferred topics. The generator picks one per post slot,
+preferring an author whose preferred topics include the assigned topic, weighted by
+how much you've liked/disliked that specific author before — so the accounts you
+respond to keep showing up, the same way recognizing a recurring account is part of
+what makes a real feed feel social.
 
 ### Endpoints
 
@@ -114,6 +143,7 @@ cache/database. This file is the source of truth the frontend actually reads fro
 | `POST` | `/api/posts/:id/react` | Body `{ "reaction": "liked" \| "disliked" \| null }`. Never calls Anthropic. |
 | `GET` | `/api/stats` | Returns `{ apiCallsThisSession }`. |
 | `GET` | `/api/stats/topics` | Per-topic `{ topic, seen, likes, dislikes }`, sorted by net score. Powers the in-app stats view. Never calls Anthropic. |
+| `GET` | `/api/liked` | All posts you've hearted, newest first. Powers the in-app favorites view. Never calls Anthropic. |
 
 To test generation in isolation before touching the UI:
 
@@ -133,6 +163,8 @@ public/
   manifest.json    PWA manifest (add-to-homescreen)
   icons/           Generated app icons (see scripts/generate-icons.js)
 scripts/
-  generate-icons.js  Regenerate the PNG icons: `npm run icons`
+  generate-icons.js     Regenerate the PNG icons: `npm run icons`
+  start-bg.sh           Background start with a real health check (used by `start:bg`)
+  setup-auto-update.sh  One-time setup: auto-run `npm run update` on new terminals
 .env.example        Template for your local .env
 ```
