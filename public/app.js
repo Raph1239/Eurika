@@ -9,6 +9,8 @@
   const statsBody = document.getElementById('stats-body');
   const favoritesBtn = document.getElementById('favorites-btn');
   const favoritesFeedEl = document.getElementById('favorites-feed');
+  const themeBtn = document.getElementById('theme-btn');
+  const themeColorMeta = document.getElementById('theme-color-meta');
 
   // Deterministic color per string (no shared list with the server needed —
   // the same string always hashes to the same hue), reused for the topic
@@ -33,12 +35,46 @@
     if (navigator.vibrate) navigator.vibrate(pattern);
   }
 
-  function showToast(message) {
+  // `action`, if given, is `{ label, onClick }` -- renders as a tappable
+  // button inside the toast (e.g. "Undo") and keeps it up longer so there's
+  // time to actually tap it.
+  function showToast(message, action) {
     const toast = document.createElement('div');
-    toast.className = 'toast';
-    toast.textContent = message;
-    toast.addEventListener('animationend', () => toast.remove());
+    toast.className = action ? 'toast has-action' : 'toast';
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    toast.appendChild(text);
+
+    if (action) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        action.onClick();
+        toast.remove();
+      });
+      toast.appendChild(btn);
+    }
+
+    toast.addEventListener('animationend', () => {
+      if (toast.isConnected) toast.remove();
+    });
     document.body.appendChild(toast);
+  }
+
+  // Purely a vanity counter, kept client-side only -- no reason to spend a
+  // server round trip (let alone an API call) just to celebrate round numbers.
+  const LIKE_COUNT_KEY = 'infiniscroll:likeCount';
+  const LIKE_MILESTONES = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
+
+  function recordLikeMilestone() {
+    const count = (parseInt(localStorage.getItem(LIKE_COUNT_KEY), 10) || 0) + 1;
+    localStorage.setItem(LIKE_COUNT_KEY, String(count));
+    if (LIKE_MILESTONES.includes(count)) {
+      showToast(`${count}th like! \u{1F389}`);
+    }
   }
 
   // Remember how far into the feed we've scrolled so reopening the app
@@ -126,7 +162,15 @@
     skipBtn.addEventListener('click', () => {
       const next = currentReaction(likeBtn, skipBtn) === 'disliked' ? null : 'disliked';
       setReaction(post.id, likeBtn, skipBtn, next).then(() => removeFromFavoritesIfNeeded(next));
-      if (next === 'disliked') vibrate([10, 30, 10]);
+      if (next === 'disliked') {
+        vibrate([10, 30, 10]);
+        showToast('Not interested', {
+          label: 'Undo',
+          onClick: () => {
+            setReaction(post.id, likeBtn, skipBtn, null).then(() => removeFromFavoritesIfNeeded(null));
+          },
+        });
+      }
     });
     shareBtn.addEventListener('click', () => sharePost(post));
 
@@ -187,6 +231,7 @@
         body: JSON.stringify({ reaction: nextReaction }),
       });
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      if (nextReaction === 'liked' && prevReaction !== 'liked') recordLikeMilestone();
     } catch (err) {
       console.error('Failed to save reaction:', err);
       applyReactionUI(likeBtn, skipBtn, prevReaction); // revert on failure
@@ -428,4 +473,40 @@
     favoritesFeedEl.classList.toggle('feed-hidden', !inFavoritesMode);
     if (inFavoritesMode) loadFavorites();
   });
+
+  // ---------- Light/dark theme toggle ----------
+
+  const THEME_KEY = 'infiniscroll:theme';
+  const THEME_COLORS = { dark: '#0a0a0d', light: '#f5f5f7' };
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    themeBtn.classList.toggle('active', theme === 'light');
+    themeBtn.setAttribute('aria-pressed', String(theme === 'light'));
+    if (themeColorMeta) themeColorMeta.setAttribute('content', THEME_COLORS[theme]);
+  }
+
+  let currentTheme = localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+  applyTheme(currentTheme);
+
+  themeBtn.addEventListener('click', () => {
+    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem(THEME_KEY, currentTheme);
+    applyTheme(currentTheme);
+  });
+
+  // ---------- Offline support ----------
+  // Lets the last posts/pages you've already loaded keep showing if you open
+  // the app with no signal. Network-first: whenever a request succeeds, the
+  // fresh response is what you see (and what gets cached); the cached copy
+  // only kicks in when the network request actually fails. That keeps the
+  // "always fresh when online" behavior intact -- offline is a fallback, not
+  // a substitute.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((err) => {
+        console.error('Service worker registration failed:', err);
+      });
+    });
+  }
 })();

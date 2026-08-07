@@ -4,15 +4,18 @@ An Instagram/TikTok-style infinite scroll feed — but every "post" is short AI-
 text (hot takes, random facts, jokes, tech takes) instead of photos. Node.js/Express
 backend, vanilla HTML/CSS/JS frontend, no build step.
 
-Heart a post (or double-tap it) to like it, or tap the X to mark it "not interested" —
-both feed into a simple recommendation algorithm that biases which topics *and which
-recurring accounts* show up more (or less) in future batches, entirely for free (see
-below). Posts come from a fixed cast of ~30 recurring personas instead of a random
-handle every time, and some posts have a couple of in-character replies. Tap the chart
-icon (top-left) for your top topics, or the heart icon next to it for your liked-posts
-view. Share a post via your phone's native share sheet, or it copies to your clipboard
-if sharing isn't supported. Installable to your phone's home screen as a standalone app
-(PWA), with haptic feedback on like/skip.
+Heart a post (or double-tap it) to like it, or tap the X to mark it "not interested"
+(with a few-second "Undo" toast in case of a mis-tap) — both feed into a simple
+recommendation algorithm that biases which topics *and which recurring accounts* show
+up more (or less) in future batches, entirely for free (see below). Posts come from a
+fixed cast of ~30 recurring personas instead of a random handle every time, and some
+posts have a couple of in-character replies. Tap the chart icon (top-left) for your top
+topics, the heart icon next to it for your liked-posts view, or the sun/circle icon to
+flip between dark and light mode. Share a post via your phone's native share sheet, or
+it copies to your clipboard if sharing isn't supported. Installable to your phone's
+home screen as a standalone app (PWA), keeps working (in a limited, read-only way) if
+you briefly lose signal, with haptic feedback on like/skip and a little celebratory
+toast at round-number like milestones.
 
 ## Setup
 
@@ -134,6 +137,20 @@ how much you've liked/disliked that specific author before — so the accounts y
 respond to keep showing up, the same way recognizing a recurring account is part of
 what makes a real feed feel social.
 
+### Works (briefly) offline
+
+`public/sw.js` is a small service worker that caches the app shell (HTML/CSS/JS/icons)
+and whatever `/api/feed` pages you've already loaded, using a **network-first**
+strategy: any time a request succeeds, you get the live response (and it refreshes the
+cache) — the cached copy is only ever used as a fallback when the network request
+actually fails. That means it doesn't fight the `Cache-Control: no-store` setup above
+(you always see the latest content while online); it just means the last handful of
+posts you scrolled through don't vanish into a blank white error screen if you duck
+into a signal dead zone. It never caches `POST` requests (reactions, generation), so
+liking/skipping still requires a connection. This is unrelated to the Codespace itself
+being reachable — the app still needs the Codespace running to load anything new or
+save a reaction; this only covers brief signal loss on your phone while it's up.
+
 ### Endpoints
 
 | Method | Path | Description |
@@ -160,6 +177,7 @@ public/
   index.html       Feed markup + post template + PWA meta tags
   style.css        Dark-mode, mobile-first, scroll-snap styling
   app.js           Infinite scroll, rendering, reactions, double-tap-to-like
+  sw.js            Service worker: network-first offline fallback caching
   manifest.json    PWA manifest (add-to-homescreen)
   icons/           Generated app icons (see scripts/generate-icons.js)
 scripts/
